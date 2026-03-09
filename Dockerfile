@@ -1,16 +1,17 @@
 # =============================================================================
-# ACE-Step 1.5 RunPod Serverless - Fixed Syntax
+# ACE-Step 1.5 RunPod Serverless - WORKING Base Image
 # =============================================================================
 
-FROM runpod/pytorch:2.5.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+FROM pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime
 
-# Install system deps for audio + ACE-Step
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libsndfile1-dev \
     git \
     curl \
     build-essential \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
@@ -20,22 +21,26 @@ ARG HF_TOKEN
 ENV HF_TOKEN=${HF_TOKEN}
 ENV HF_HUB_ENABLE_HF_TRANSFER=1
 
-# Clone ACE-Step 1.5
+# Upgrade pip
+RUN pip install --upgrade pip
+
+# Clone and install ACE-Step 1.5
 RUN git clone https://github.com/ace-step/ACE-Step-1.5.git /workspace/ace-step && \
     cd /workspace/ace-step && \
     pip install --no-cache-dir -e .
 
-# Download models (SINGLE LINE - fixes parse error)
-RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/Ace-Step1.5', local_dir='/workspace/models', token='${HF_TOKEN}', ignore_patterns=['acestep-v15-turbo/*'])" && \
+# Download models (single line per model)
+RUN pip install huggingface_hub && \
+    python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/Ace-Step1.5', local_dir='/workspace/models', token='${HF_TOKEN}', ignore_patterns=['acestep-v15-turbo/*'])" && \
     python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/acestep-v15-base', local_dir='/workspace/models/acestep-v15-base', token='${HF_TOKEN}')"
 
-# Copy your custom handler
+# Copy handler
 COPY handler.py /workspace/
 
 # Create outputs directory
 RUN mkdir -p /workspace/outputs
 
-# Expose RunPod port
+# Expose port
 EXPOSE 8000
 
 # RunPod serverless entrypoint
