@@ -1,5 +1,5 @@
 # =============================================================================
-# ACE-Step 1.5 RunPod Serverless - WORKING Base Image
+# ACE-Step 1.5 RunPod Serverless - FINAL WORKING VERSION
 # =============================================================================
 
 FROM pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime
@@ -16,25 +16,31 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /workspace
 
-# Accept HF_TOKEN from RunPod Environment Variables
-ARG HF_TOKEN
-ENV HF_TOKEN=${HF_TOKEN}
-ENV HF_HUB_ENABLE_HF_TRANSFER=1
-
 # Upgrade pip
 RUN pip install --upgrade pip
 
-# Clone and install ACE-Step 1.5
-RUN git clone https://github.com/ace-step/ACE-Step-1.5.git /workspace/ace-step && \
-    cd /workspace/ace-step && \
-    pip install --no-cache-dir -e .
+# Clone ACE-Step 1.5 (FIXED URL - no markdown)
+RUN git clone https://github.com/ace-step/ACE-Step-1.5.git /workspace/ace-step
 
-# Download models (single line per model)
-RUN pip install huggingface_hub && \
-    python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/Ace-Step1.5', local_dir='/workspace/models', token='${HF_TOKEN}', ignore_patterns=['acestep-v15-turbo/*'])" && \
-    python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/acestep-v15-base', local_dir='/workspace/models/acestep-v15-base', token='${HF_TOKEN}')"
+# Install ACE-Step
+WORKDIR /workspace/ace-step
+RUN pip install --no-cache-dir -e .
 
-# Copy handler
+# Install huggingface_hub for model download
+RUN pip install huggingface_hub
+
+# Download models using BuildKit secret (no ARG/ENV exposure)
+RUN --mount=type=secret,id=hf_token \
+    HF_TOKEN=$(cat /run/secrets/hf_token) && \
+    python -c "from huggingface_hub import snapshot_download; \
+    snapshot_download('ACE-Step/Ace-Step1.5', local_dir='/workspace/models', token='$HF_TOKEN', ignore_patterns=['acestep-v15-turbo/*'])" && \
+    python -c "from huggingface_hub import snapshot_download; \
+    snapshot_download('ACE-Step/acestep-v15-base', local_dir='/workspace/models/acestep-v15-base', token='$HF_TOKEN')"
+
+# Copy back to workspace root
+WORKDIR /workspace
+
+# Copy your handler
 COPY handler.py /workspace/
 
 # Create outputs directory
@@ -45,6 +51,7 @@ EXPOSE 8000
 
 # RunPod serverless entrypoint
 ENTRYPOINT ["python", "-u", "handler.py"]
+
 
 
 
