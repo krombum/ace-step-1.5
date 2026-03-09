@@ -1,6 +1,5 @@
 # =============================================================================
-# ACE-Step 1.5 RunPod Serverless - Single Stage (Optimized)
-# Uses HF_TOKEN from RunPod Environment Variables
+# ACE-Step 1.5 RunPod Serverless - Fixed Syntax
 # =============================================================================
 
 FROM runpod/pytorch:2.5.0-py3.11-cuda12.4.1-devel-ubuntu22.04
@@ -21,23 +20,14 @@ ARG HF_TOKEN
 ENV HF_TOKEN=${HF_TOKEN}
 ENV HF_HUB_ENABLE_HF_TRANSFER=1
 
-# Clone ACE-Step 1.5 directly (no COPY needed)
+# Clone ACE-Step 1.5
 RUN git clone https://github.com/ace-step/ACE-Step-1.5.git /workspace/ace-step && \
     cd /workspace/ace-step && \
     pip install --no-cache-dir -e .
 
-# Download models using HF_TOKEN (essential for gated models)
-RUN python -c "
-import os
-from huggingface_hub import snapshot_download
-token = os.environ.get('HF_TOKEN')
-if not token:
-    raise ValueError('HF_TOKEN required for gated models')
-print('Downloading ACE-Step 1.5 models...')
-snapshot_download('ACE-Step/Ace-Step1.5', local_dir='/workspace/models', token=token, ignore_patterns=['acestep-v15-turbo/*'])
-snapshot_download('ACE-Step/acestep-v15-base', local_dir='/workspace/models/acestep-v15-base', token=token)
-print('✅ Models cached')
-"
+# Download models (SINGLE LINE - fixes parse error)
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/Ace-Step1.5', local_dir='/workspace/models', token='${HF_TOKEN}', ignore_patterns=['acestep-v15-turbo/*'])" && \
+    python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/acestep-v15-base', local_dir='/workspace/models/acestep-v15-base', token='${HF_TOKEN}')"
 
 # Copy your custom handler
 COPY handler.py /workspace/
@@ -50,6 +40,7 @@ EXPOSE 8000
 
 # RunPod serverless entrypoint
 ENTRYPOINT ["python", "-u", "handler.py"]
+
 
 
 
