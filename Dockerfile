@@ -1,111 +1,141 @@
-# =============================================================================
-# ACE-Step 1.5 FastAPI Server - Multi-stage Dockerfile
-# =============================================================================
-# This image includes the ACE-Step models (~15GB total)
-# Build with: docker build --build-arg HF_TOKEN=your_token -t acestep-api:latest .
-# =============================================================================
+FROM runpod/pytorch:2.5.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
-# -----------------------------------------------------------------------------
-# Stage 1: Model Downloader - Download models from HuggingFace
-# -----------------------------------------------------------------------------
-FROM python:3.11-slim as model-downloader
+# Install system deps for audio
+RUN apt-get update && apt-get install -y \
+    ffmpeg libsndfile1-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Accept HuggingFace token as build argument (required for gated models)
-ARG HF_TOKEN
-ENV HF_TOKEN=${HF_TOKEN}
+WORKDIR /workspace
 
-WORKDIR /models
+# Copy ACE-Step 1.5 + your custom handler
+COPY . .
 
-# Install huggingface-hub with hf_transfer for faster downloads
-RUN pip install --no-cache-dir "huggingface-hub[cli,hf_transfer]"
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Enable fast transfers
-ENV HF_HUB_ENABLE_HF_TRANSFER=1
+# Pre-download models (reduces cold starts)
+RUN python -c "
+from ace_step.models import download_models
+download_models()
+print('✅ Models cached')
+"
 
-# Download main model package (includes VAE, Qwen3-Embedding, acestep-5Hz-lm-1.7B)
-# Uses HF_TOKEN for authentication with gated repos
-# Exclude acestep-v15-turbo since we use acestep-v15-base instead
-RUN python -c "import os; from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/Ace-Step1.5', local_dir='/models/checkpoints', token=os.environ.get('HF_TOKEN'), ignore_patterns=['acestep-v15-turbo/*'])"
+# Expose ports
+EXPOSE 8000
 
-# Download acestep-v15-base as the primary DiT model
-RUN python -c "import os; from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/acestep-v15-base', local_dir='/models/checkpoints/acestep-v15-base', token=os.environ.get('HF_TOKEN'))"
+# RunPod serverless worker entrypoint
+ENTRYPOINT ["python", "handler.py"]
 
-# Optional: Download additional LM models (uncomment if needed)
-# RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/acestep-5Hz-lm-0.6B', local_dir='/models/checkpoints/acestep-5Hz-lm-0.6B')"
-# RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/acestep-5Hz-lm-4B', local_dir='/models/checkpoints/acestep-5Hz-lm-4B')"
 
-# Optional: Download additional DiT models (uncomment if needed)
-# RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/acestep-v15-turbo-shift3', local_dir='/models/checkpoints/acestep-v15-turbo-shift3')"
+# # =============================================================================
+# # ACE-Step 1.5 FastAPI Server - Multi-stage Dockerfile
+# # =============================================================================
+# # This image includes the ACE-Step models (~15GB total)
+# # Build with: docker build --build-arg HF_TOKEN=your_token -t acestep-api:latest .
+# # =============================================================================
 
-# -----------------------------------------------------------------------------
-# Stage 2: Runtime - Install ACE-Step and run from /app
-# -----------------------------------------------------------------------------
-FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04 as runtime
+# # -----------------------------------------------------------------------------
+# # Stage 1: Model Downloader - Download models from HuggingFace
+# # -----------------------------------------------------------------------------
+# FROM python:3.11-slim as model-downloader
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    # ACE-Step configuration
-    ACESTEP_PROJECT_ROOT=/app \
-    ACESTEP_OUTPUT_DIR=/app/outputs \
-    ACESTEP_TMPDIR=/app/outputs \
-    ACESTEP_DEVICE=cuda \
-    # ACE-Step API model paths (full paths to pre-baked models)
-    ACESTEP_CONFIG_PATH=/app/checkpoints/acestep-v15-base \
-    ACESTEP_LM_MODEL_PATH=/app/checkpoints/acestep-5Hz-lm-1.7B \
-    ACESTEP_LM_BACKEND=pt \
-    # Server configuration
-    ACESTEP_API_HOST=0.0.0.0 \
-    ACESTEP_API_PORT=8000
+# # Accept HuggingFace token as build argument (required for gated models)
+# ARG HF_TOKEN
+# ENV HF_TOKEN=${HF_TOKEN}
 
-WORKDIR /app
+# WORKDIR /models
 
-# Install system dependencies including Python, pip, git, and build tools
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 \
-    python3.11-dev \
-    python3-pip \
-    git \
-    curl \
-    build-essential \
-    libsndfile1 \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python
+# # Install huggingface-hub with hf_transfer for faster downloads
+# RUN pip install --no-cache-dir "huggingface-hub[cli,hf_transfer]"
 
-# Install uv for faster dependency resolution
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
+# # Enable fast transfers
+# ENV HF_HUB_ENABLE_HF_TRANSFER=1
 
-# Clone ACE-Step directly into /app and install
-RUN git clone https://github.com/ace-step/ACE-Step-1.5.git /app && \
-    rm -rf /app/.git && \
-    uv pip install --system --no-cache .
+# # Download main model package (includes VAE, Qwen3-Embedding, acestep-5Hz-lm-1.7B)
+# # Uses HF_TOKEN for authentication with gated repos
+# # Exclude acestep-v15-turbo since we use acestep-v15-base instead
+# RUN python -c "import os; from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/Ace-Step1.5', local_dir='/models/checkpoints', token=os.environ.get('HF_TOKEN'), ignore_patterns=['acestep-v15-turbo/*'])"
 
-# Create symlink so ACE-Step's model discovery finds /app/checkpoints
-# ACE-Step uses __file__ to locate checkpoints relative to its install path
-RUN ln -s /app/checkpoints /usr/local/lib/python3.11/dist-packages/checkpoints
+# # Download acestep-v15-base as the primary DiT model
+# RUN python -c "import os; from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/acestep-v15-base', local_dir='/models/checkpoints/acestep-v15-base', token=os.environ.get('HF_TOKEN'))"
 
-# Copy models from model-downloader stage into /app/checkpoints
-COPY --from=model-downloader /models/checkpoints /app/checkpoints
+# # Optional: Download additional LM models (uncomment if needed)
+# # RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/acestep-5Hz-lm-0.6B', local_dir='/models/checkpoints/acestep-5Hz-lm-0.6B')"
+# # RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/acestep-5Hz-lm-4B', local_dir='/models/checkpoints/acestep-5Hz-lm-4B')"
 
-# Create placeholder for acestep-v15-turbo to satisfy check_main_model_exists()
-# We use acestep-v15-base instead, but the check looks for all MAIN_MODEL_COMPONENTS
-RUN mkdir -p /app/checkpoints/acestep-v15-turbo
+# # Optional: Download additional DiT models (uncomment if needed)
+# # RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/acestep-v15-turbo-shift3', local_dir='/models/checkpoints/acestep-v15-turbo-shift3')"
 
-# Copy startup script
-COPY start.sh /app/start.sh
-RUN chmod +x /app/start.sh
+# # -----------------------------------------------------------------------------
+# # Stage 2: Runtime - Install ACE-Step and run from /app
+# # -----------------------------------------------------------------------------
+# FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04 as runtime
 
-# Create output directory
-RUN mkdir -p /app/outputs
+# # Set environment variables
+# ENV PYTHONDONTWRITEBYTECODE=1 \
+#     PYTHONUNBUFFERED=1 \
+#     # ACE-Step configuration
+#     ACESTEP_PROJECT_ROOT=/app \
+#     ACESTEP_OUTPUT_DIR=/app/outputs \
+#     ACESTEP_TMPDIR=/app/outputs \
+#     ACESTEP_DEVICE=cuda \
+#     # ACE-Step API model paths (full paths to pre-baked models)
+#     ACESTEP_CONFIG_PATH=/app/checkpoints/acestep-v15-base \
+#     ACESTEP_LM_MODEL_PATH=/app/checkpoints/acestep-5Hz-lm-1.7B \
+#     ACESTEP_LM_BACKEND=pt \
+#     # Server configuration
+#     ACESTEP_API_HOST=0.0.0.0 \
+#     ACESTEP_API_PORT=8000
 
-# Expose ports (8000 for API, 7860 for Gradio UI)
-EXPOSE 8000 7860
+# WORKDIR /app
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+# # Install system dependencies including Python, pip, git, and build tools
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     python3.11 \
+#     python3.11-dev \
+#     python3-pip \
+#     git \
+#     curl \
+#     build-essential \
+#     libsndfile1 \
+#     ffmpeg \
+#     && rm -rf /var/lib/apt/lists/* \
+#     && ln -sf /usr/bin/python3.11 /usr/bin/python
 
-# Run both API server and Gradio UI
-CMD ["/app/start.sh"]
+# # Install uv for faster dependency resolution
+# RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+# ENV PATH="/root/.local/bin:$PATH"
+
+# # Clone ACE-Step directly into /app and install
+# RUN git clone https://github.com/ace-step/ACE-Step-1.5.git /app && \
+#     rm -rf /app/.git && \
+#     uv pip install --system --no-cache .
+
+# # Create symlink so ACE-Step's model discovery finds /app/checkpoints
+# # ACE-Step uses __file__ to locate checkpoints relative to its install path
+# RUN ln -s /app/checkpoints /usr/local/lib/python3.11/dist-packages/checkpoints
+
+# # Copy models from model-downloader stage into /app/checkpoints
+# COPY --from=model-downloader /models/checkpoints /app/checkpoints
+
+# # Create placeholder for acestep-v15-turbo to satisfy check_main_model_exists()
+# # We use acestep-v15-base instead, but the check looks for all MAIN_MODEL_COMPONENTS
+# RUN mkdir -p /app/checkpoints/acestep-v15-turbo
+
+# # Copy startup script
+# COPY start.sh /app/start.sh
+# RUN chmod +x /app/start.sh
+
+# # Create output directory
+# RUN mkdir -p /app/outputs
+
+# # Expose ports (8000 for API, 7860 for Gradio UI)
+# EXPOSE 8000 7860
+
+# # Health check
+# HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+#     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+
+# # Run both API server and Gradio UI
+# CMD ["/app/start.sh"]
