@@ -1,31 +1,56 @@
+# =============================================================================
+# ACE-Step 1.5 RunPod Serverless - Single Stage (Optimized)
+# Uses HF_TOKEN from RunPod Environment Variables
+# =============================================================================
+
 FROM runpod/pytorch:2.5.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
-# Install system deps for audio
+# Install system deps for audio + ACE-Step
 RUN apt-get update && apt-get install -y \
-    ffmpeg libsndfile1-dev \
+    ffmpeg \
+    libsndfile1-dev \
+    git \
+    curl \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 
-# Copy ACE-Step 1.5 + your custom handler
-COPY . .
+# Accept HF_TOKEN from RunPod Environment Variables
+ARG HF_TOKEN
+ENV HF_TOKEN=${HF_TOKEN}
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Clone ACE-Step 1.5 directly (no COPY needed)
+RUN git clone https://github.com/ace-step/ACE-Step-1.5.git /workspace/ace-step && \
+    cd /workspace/ace-step && \
+    pip install --no-cache-dir -e .
 
-# Pre-download models (reduces cold starts)
+# Download models using HF_TOKEN (essential for gated models)
 RUN python -c "
-from ace_step.models import download_models
-download_models()
+import os
+from huggingface_hub import snapshot_download
+token = os.environ.get('HF_TOKEN')
+if not token:
+    raise ValueError('HF_TOKEN required for gated models')
+print('Downloading ACE-Step 1.5 models...')
+snapshot_download('ACE-Step/Ace-Step1.5', local_dir='/workspace/models', token=token, ignore_patterns=['acestep-v15-turbo/*'])
+snapshot_download('ACE-Step/acestep-v15-base', local_dir='/workspace/models/acestep-v15-base', token=token)
 print('✅ Models cached')
 "
 
-# Expose ports
+# Copy your custom handler
+COPY handler.py /workspace/
+
+# Create outputs directory
+RUN mkdir -p /workspace/outputs
+
+# Expose RunPod port
 EXPOSE 8000
 
-# RunPod serverless worker entrypoint
-ENTRYPOINT ["python", "handler.py"]
+# RunPod serverless entrypoint
+ENTRYPOINT ["python", "-u", "handler.py"]
+
 
 
 # # =============================================================================
