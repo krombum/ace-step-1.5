@@ -1,56 +1,59 @@
 # =============================================================================
-# ACE-Step 1.5 RunPod Serverless - FINAL WORKING VERSION
+# ACE-Step 1.5 FastAPI Server - RunPod Compatible (USE THIS EXACTLY)
 # =============================================================================
 
-FROM pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime
+# Stage 1: Model Downloader
+FROM python:3.11-slim as model-downloader
+ARG HF_TOKEN
+ENV HF_TOKEN=${HF_TOKEN}
+WORKDIR /models
+RUN pip install --no-cache-dir "huggingface-hub[cli,hf_transfer]"
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/Ace-Step1.5', local_dir='/models/checkpoints', token=os.environ['HF_TOKEN'], ignore_patterns=['acestep-v15-turbo/*'])"
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/acestep-v15-base', local_dir='/models/checkpoints/acestep-v15-base', token=os.environ['HF_TOKEN'])"
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    libsndfile1-dev \
+# Stage 2: Runtime (RunPod Serverless)
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    ACESTEP_PROJECT_ROOT=/app \
+    ACESTEP_OUTPUT_DIR=/app/outputs \
+    ACESTEP_TMPDIR=/app/outputs \
+    ACESTEP_DEVICE=cuda \
+    ACESTEP_CONFIG_PATH=/app/checkpoints/acestep-v15-base \
+    ACESTEP_LM_MODEL_PATH=/app/checkpoints/acestep-5Hz-lm-1.7B \
+    ACESTEP_LM_BACKEND=pt \
+    ACESTEP_API_HOST=0.0.0.0 \
+    ACESTEP_API_PORT=8000
+
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-dev \
+    python3-pip \
     git \
     curl \
     build-essential \
-    python3-pip \
-    && rm -rf /var/lib/apt/lists/*
+    libsndfile1 \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python
 
-WORKDIR /workspace
+# Install uv + ACE-Step (PROVEN WORKING)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
+RUN git clone https://github.com/ace-step/ACE-Step-1.5.git /app && \
+    rm -rf /app/.git && \
+    uv pip install --system --no-cache .
 
-# Upgrade pip
-RUN pip install --upgrade pip
+RUN ln -s /app/checkpoints /usr/local/lib/python3.11/dist-packages/checkpoints
+COPY --from=model-downloader /models/checkpoints /app/checkpoints
+RUN mkdir -p /app/checkpoints/acestep-v15-turbo
+COPY handler.py /app/
+RUN mkdir -p /app/outputs
 
-# Clone ACE-Step 1.5 (FIXED URL - no markdown)
-RUN git clone https://github.com/ace-step/ACE-Step-1.5.git /workspace/ace-step
-
-# Install ACE-Step
-WORKDIR /workspace/ace-step
-RUN pip install --no-cache-dir -e .
-
-# Install huggingface_hub for model download
-RUN pip install huggingface_hub
-
-# Download models using BuildKit secret (no ARG/ENV exposure)
-RUN --mount=type=secret,id=hf_token \
-    HF_TOKEN=$(cat /run/secrets/hf_token) && \
-    python -c "from huggingface_hub import snapshot_download; \
-    snapshot_download('ACE-Step/Ace-Step1.5', local_dir='/workspace/models', token='$HF_TOKEN', ignore_patterns=['acestep-v15-turbo/*'])" && \
-    python -c "from huggingface_hub import snapshot_download; \
-    snapshot_download('ACE-Step/acestep-v15-base', local_dir='/workspace/models/acestep-v15-base', token='$HF_TOKEN')"
-
-# Copy back to workspace root
-WORKDIR /workspace
-
-# Copy your handler
-COPY handler.py /workspace/
-
-# Create outputs directory
-RUN mkdir -p /workspace/outputs
-
-# Expose port
 EXPOSE 8000
-
-# RunPod serverless entrypoint
-ENTRYPOINT ["python", "-u", "handler.py"]
+ENTRYPOINT ["python", "handler.py"]
 
 
 
