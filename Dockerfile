@@ -1,19 +1,5 @@
-# =============================================================================
-# ACE-Step 1.5 FastAPI Server - RunPod Compatible (USE THIS EXACTLY)
-# =============================================================================
-
-# Stage 1: Model Downloader
-FROM python:3.11-slim as model-downloader
-ARG HF_TOKEN
-ENV HF_TOKEN=${HF_TOKEN}
-WORKDIR /models
-RUN pip install --no-cache-dir "huggingface-hub[cli,hf_transfer]"
-ENV HF_HUB_ENABLE_HF_TRANSFER=1
-RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/Ace-Step1.5', local_dir='/models/checkpoints', token=os.environ['HF_TOKEN'], ignore_patterns=['acestep-v15-turbo/*'])"
-RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/acestep-v15-base', local_dir='/models/checkpoints/acestep-v15-base', token=os.environ['HF_TOKEN'])"
-
-# Stage 2: Runtime (RunPod Serverless)
 FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     ACESTEP_PROJECT_ROOT=/app \
@@ -22,35 +8,27 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     ACESTEP_DEVICE=cuda \
     ACESTEP_CONFIG_PATH=/app/checkpoints/acestep-v15-base \
     ACESTEP_LM_MODEL_PATH=/app/checkpoints/acestep-5Hz-lm-1.7B \
-    ACESTEP_LM_BACKEND=pt \
     ACESTEP_API_HOST=0.0.0.0 \
     ACESTEP_API_PORT=8000
 
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 \
-    python3.11-dev \
-    python3-pip \
-    git \
-    curl \
-    build-essential \
-    libsndfile1 \
-    ffmpeg \
+RUN apt-get update && apt-get install -y \
+    python3.11 python3.11-dev python3-pip git curl \
+    build-essential libsndfile1 ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3.11 /usr/bin/python
 
-# Install uv + ACE-Step (PROVEN WORKING)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
+
+# Install ACE-Step (models download on first run via HF_TOKEN)
 RUN git clone https://github.com/ace-step/ACE-Step-1.5.git /app && \
     rm -rf /app/.git && \
     uv pip install --system --no-cache .
 
-RUN ln -s /app/checkpoints /usr/local/lib/python3.11/dist-packages/checkpoints
-COPY --from=model-downloader /models/checkpoints /app/checkpoints
-RUN mkdir -p /app/checkpoints/acestep-v15-turbo
 COPY handler.py /app/
-RUN mkdir -p /app/outputs
+RUN mkdir -p /app/outputs /app/checkpoints && \
+    mkdir -p /app/checkpoints/acestep-v15-turbo
 
 EXPOSE 8000
 ENTRYPOINT ["python", "handler.py"]
